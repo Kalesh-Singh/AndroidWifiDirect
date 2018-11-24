@@ -3,6 +3,7 @@ package com.techexchange.mobileapps.wifidirectlab;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.net.NetworkInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.widget.Toast;
 
@@ -41,6 +42,17 @@ public class WifiDirectBroadcastReceiver extends BroadcastReceiver {
             }
         } else if (WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION.equals(action)) {
             // Respond to new connections or disconnections.
+            if (wifiP2pManager == null) {
+                return;
+            }
+
+            NetworkInfo networkInfo = intent.getParcelableExtra(WifiP2pManager.EXTRA_NETWORK_INFO);
+
+            if (networkInfo.isConnected()) {
+                wifiP2pManager.requestConnectionInfo(channel, activity.connectionInfoListener);
+            } else {
+                activity.connectionStatusTextView.setText("Device disconnected");
+            }
         } else if (WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION.equals(action)) {
             // Respond to this device's Wi-Fi state changing.
         }
