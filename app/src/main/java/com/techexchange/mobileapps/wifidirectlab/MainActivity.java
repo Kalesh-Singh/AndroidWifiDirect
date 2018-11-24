@@ -9,6 +9,9 @@ import android.net.wifi.p2p.WifiP2pDevice;
 import android.net.wifi.p2p.WifiP2pDeviceList;
 import android.net.wifi.p2p.WifiP2pInfo;
 import android.net.wifi.p2p.WifiP2pManager;
+import android.os.Handler;
+import android.os.Message;
+import android.os.StrictMode;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.View;
@@ -21,7 +24,13 @@ import android.widget.TableLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -46,13 +55,121 @@ public class MainActivity extends AppCompatActivity {
     String[] deviceNameArray;
     WifiP2pDevice[] deviceArray;
 
+    static final int MESSAGE_READ = 1;
+
+    ServerThread serverThread;
+    ClientThread clientThread;
+    SendReceiveThread sendReceiveThread;
+
+    public class ServerThread extends Thread {
+        Socket socket;
+        ServerSocket serverSocket;
+
+        @Override
+        public void run() {
+            try {
+                serverSocket = new ServerSocket(8888);
+                socket = serverSocket.accept();
+                sendReceiveThread = new SendReceiveThread(socket);
+                sendReceiveThread.start();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        }
+    }
+
+    public class ClientThread extends Thread {
+        Socket socket;
+        String hostAddress;
+
+        ClientThread(InetAddress hostAddress) {
+            this.hostAddress = hostAddress.getHostAddress();
+            socket = new Socket();
+        }
+
+        @Override
+        public void run() {
+            try {
+                socket.connect(new InetSocketAddress(hostAddress, 8888), 500);
+                sendReceiveThread = new SendReceiveThread(socket);
+                sendReceiveThread.start();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public class SendReceiveThread extends Thread {
+        private Socket socket;
+        private InputStream inputStream;
+        private OutputStream outputStream;
+
+        public SendReceiveThread(Socket socket) {
+            this.socket = socket;
+            try {
+                inputStream = socket.getInputStream();
+                outputStream = socket.getOutputStream();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            byte[] buffer = new byte[1024];
+            int bytes;
+
+            while (socket != null) {
+                // Listen for message
+                try {
+                    bytes = inputStream.read(buffer);
+                    if (bytes > 0) {
+                        // We received something
+                        handler.obtainMessage(MESSAGE_READ, bytes, -1, buffer)
+                                .sendToTarget();
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        public void write(byte[] bytes) {
+            try {
+                outputStream.write(bytes);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+
+        // Allow netowrk operations on main thread for simplicity.
+        StrictMode.ThreadPolicy policy
+                = new StrictMode.ThreadPolicy.Builder().permitAll().build();
+        StrictMode.setThreadPolicy(policy);
+
+
         initializeComponents();
         executeListener();
     }
+
+    Handler handler = new Handler(msg -> {
+        switch (msg.what) {
+            case MESSAGE_READ:
+                byte[] readBuffer = (byte[]) msg.obj;
+                String tempMsg = new String(readBuffer, 0, msg.arg1);
+                readMsgTextView.setText(tempMsg);
+                break;
+        }
+        return true;
+    });
 
     private void executeListener() {
         onOffButton.setOnClickListener(v -> {
@@ -81,10 +198,16 @@ public class MainActivity extends AppCompatActivity {
             });
         });
 
+        sendButton.setOnClickListener(v -> {
+            String msg = writeMsgEditText.getText().toString();
+            sendReceiveThread.write(msg.getBytes());
+        });
+
         listView.setOnItemClickListener((parent, view, position, id) -> {
             final WifiP2pDevice device = deviceArray[position];
             WifiP2pConfig config = new WifiP2pConfig();
             config.deviceAddress = device.deviceAddress;
+//            config.wps.setup = WpsInfo.PBC;
 
             wifiP2pManager.connect(channel, config, new WifiP2pManager.ActionListener() {
                 @Override
@@ -116,31 +239,6 @@ public class MainActivity extends AppCompatActivity {
 
         // Unregister the broadcast receiver
         unregisterReceiver(receiver);
-    }
-
-    private void initializeComponents() {
-        onOffButton = findViewById(R.id.onOff);
-        discoverButton = findViewById(R.id.discover);
-        sendButton = findViewById(R.id.sendButton);
-        listView = findViewById(R.id.peerListView);
-        readMsgTextView = findViewById(R.id.readMsg);
-        connectionStatusTextView = findViewById(R.id.connectionStatus);
-        writeMsgEditText = findViewById(R.id.writeMsg);
-
-        wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
-        if (wifiManager.isWifiEnabled()) {
-            onOffButton.setText("Wifi off");
-        }
-
-        wifiP2pManager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
-        channel = wifiP2pManager.initialize(this, getMainLooper(), null);
-        receiver = new WifiDirectBroadcastReceiver(wifiP2pManager, channel, this);
-
-        intentFilter = new IntentFilter();
-        intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
-        intentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
-        intentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
-        intentFilter.addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION);
     }
 
     WifiP2pManager.PeerListListener peerListListener = peerList -> {
@@ -178,10 +276,39 @@ public class MainActivity extends AppCompatActivity {
 
             if (info.groupFormed && info.isGroupOwner) {
                 connectionStatusTextView.setText("Host");
+                serverThread = new ServerThread();
+                serverThread.start();
             } else if (info.groupFormed) {
                 connectionStatusTextView.setText("Client");
+                clientThread = new ClientThread(groupOwnerAddress);
+                clientThread.start();
             }
         }
     };
+
+    private void initializeComponents() {
+        onOffButton = findViewById(R.id.onOff);
+        discoverButton = findViewById(R.id.discover);
+        sendButton = findViewById(R.id.sendButton);
+        listView = findViewById(R.id.peerListView);
+        readMsgTextView = findViewById(R.id.readMsg);
+        connectionStatusTextView = findViewById(R.id.connectionStatus);
+        writeMsgEditText = findViewById(R.id.writeMsg);
+
+        wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
+        if (wifiManager.isWifiEnabled()) {
+            onOffButton.setText("Wifi off");
+        }
+
+        wifiP2pManager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
+        channel = wifiP2pManager.initialize(this, getMainLooper(), null);
+        receiver = new WifiDirectBroadcastReceiver(wifiP2pManager, channel, this);
+
+        intentFilter = new IntentFilter();
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION);
+    }
 
 }
