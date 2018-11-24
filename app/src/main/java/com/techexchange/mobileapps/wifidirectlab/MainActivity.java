@@ -1,7 +1,10 @@
 package com.techexchange.mobileapps.wifidirectlab;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.IntentFilter;
 import android.net.wifi.WifiManager;
+import android.net.wifi.p2p.WifiP2pManager;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.widget.Button;
@@ -20,6 +23,11 @@ public class MainActivity extends AppCompatActivity {
     EditText writeMsgEditText;
 
     WifiManager wifiManager;
+    WifiP2pManager wifiP2pManager;
+    WifiP2pManager.Channel channel;
+
+    BroadcastReceiver receiver;
+    IntentFilter intentFilter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -41,6 +49,22 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+
+        // Register the broadcast receiver
+        registerReceiver(receiver, intentFilter);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+
+        // Unregister the broadcast receiver
+        unregisterReceiver(receiver);
+    }
+
     private void initializeComponents() {
         onOffButton = findViewById(R.id.onOff);
         discoverButton = findViewById(R.id.discover);
@@ -50,9 +74,19 @@ public class MainActivity extends AppCompatActivity {
         connectionStatusTextView = findViewById(R.id.connectionStatus);
         writeMsgEditText = findViewById(R.id.writeMsg);
 
-        wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        wifiManager = (WifiManager) getSystemService(Context.WIFI_SERVICE);
         if (wifiManager.isWifiEnabled()) {
             onOffButton.setText("Wifi off");
         }
+
+        wifiP2pManager = (WifiP2pManager) getSystemService(Context.WIFI_P2P_SERVICE);
+        channel = wifiP2pManager.initialize(this, getMainLooper(), null);
+        receiver = new WifiDirectBroadcastReceiver(wifiP2pManager, channel, this);
+
+        intentFilter = new IntentFilter();
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION);
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION);
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION);
+        intentFilter.addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION);
     }
 }
